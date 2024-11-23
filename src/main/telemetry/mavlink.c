@@ -67,6 +67,7 @@
 #include "sensors/barometer.h"
 #include "sensors/boardalignment.h"
 #include "sensors/battery.h"
+#include "sensors/esc_sensor.h"
 
 #include "telemetry/telemetry.h"
 #include "telemetry/mavlink.h"
@@ -92,9 +93,9 @@ static portSharing_e mavlinkPortSharing;
 
 /* MAVLink datastream rates in Hz */
 static const uint8_t mavRates[] = {
-    [MAV_DATA_STREAM_EXTENDED_STATUS] = 2, //2Hz
-    [MAV_DATA_STREAM_RC_CHANNELS] = 5, //5Hz
-    [MAV_DATA_STREAM_POSITION] = 2, //2Hz
+    [MAV_DATA_STREAM_EXTENDED_STATUS] = 1, //2Hz
+    [MAV_DATA_STREAM_RC_CHANNELS] = 1, //5Hz
+    [MAV_DATA_STREAM_POSITION] = 1, //2Hz
     [MAV_DATA_STREAM_EXTRA1] = 10, //10Hz
     [MAV_DATA_STREAM_EXTRA2] = 10 //2Hz
 };
@@ -264,6 +265,55 @@ void mavlinkSendSystemStatus(void)
         0);
     msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
     mavlinkSerialWrite(mavBuffer, msgLength);
+}
+
+// Write a function that sends the ESC telemetry data over MAVLink
+// This will use the escSensorData_t *getEscSensorData(uint8_t motorNumber) function
+void mavlinkSendESCData(void)
+{
+    uint16_t msgLength;
+    uint8_t i;
+
+    // Get the ESC telemetry data
+    uint8_t escCount = getMotorCount();
+    escSensorData_t* escData;
+
+    uint16_t voltage[4];
+    uint16_t current[4];
+    uint16_t totalcurrent[4];
+    uint16_t rpm[4];
+    uint16_t count[4];
+    uint8_t temperature[4];
+
+    for (i = 0; i < escCount; i++) {
+        escData = getEscSensorData(i);
+        voltage[i] = escData->voltage;
+        current[i] = escData->current;
+        totalcurrent[i] = escData->consumption;
+        rpm[i] = escData->rpm;
+        count[i] = 0;
+        temperature[i] = escData->temperature;
+    }
+
+    // pack the ESC telemetry data into the MAVLink message using mavlink_msg_esc_telemetry_pack
+    mavlink_msg_esc_telemetry_pack(0, 200, &mavMsg,
+        // voltage Voltage in millivolts
+        voltage,
+        // current Current in milliamps
+        current,
+        // totalcurrent Total current in milliamps
+        totalcurrent,
+        // rpm RPM of the ESC
+        rpm,
+        // count Number of telemetry packets received
+        count,
+        // temperature Temperature of the ESC
+        temperature);
+
+    // Send the ESC telemetry data over MAVLink
+    msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
+    mavlinkSerialWrite(mavBuffer, msgLength);
+
 }
 
 void mavlinkSendRCChannelsAndRSSI(void)
@@ -527,7 +577,7 @@ void processMAVLinkTelemetry(void)
 #endif
 
     if (mavlinkStreamTrigger(MAV_DATA_STREAM_EXTRA1)) {
-        mavlinkSendAttitude();
+        mavlinkSendESCData();
     }
 
     if (mavlinkStreamTrigger(MAV_DATA_STREAM_EXTRA2)) {
