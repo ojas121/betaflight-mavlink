@@ -771,6 +771,8 @@ typedef enum MAV_BATTERY_FUNCTION
 #include "./mavlink_msg_statustext.h"
 #include "./mavlink_msg_debug.h"
 
+#include "./mavlink_msg_esc_telemetry.h"
+
 #ifdef __cplusplus
 }
 #endif // __cplusplus
