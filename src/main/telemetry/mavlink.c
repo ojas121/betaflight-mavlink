@@ -93,11 +93,11 @@ static portSharing_e mavlinkPortSharing;
 
 /* MAVLink datastream rates in Hz */
 static const uint8_t mavRates[] = {
-    [MAV_DATA_STREAM_EXTENDED_STATUS] = 1, //2Hz
-    [MAV_DATA_STREAM_RC_CHANNELS] = 1, //5Hz
-    [MAV_DATA_STREAM_POSITION] = 1, //2Hz
-    [MAV_DATA_STREAM_EXTRA1] = 10, //10Hz
-    [MAV_DATA_STREAM_EXTRA2] = 10 //2Hz
+    [MAV_DATA_STREAM_EXTENDED_STATUS] = TELEMETRY_MAVLINK_MAXRATE, // Status, incl. voltage
+    [MAV_DATA_STREAM_RC_CHANNELS] = 1, // Unused
+    [MAV_DATA_STREAM_POSITION] = 1, // Unused
+    [MAV_DATA_STREAM_EXTRA1] = TELEMETRY_MAVLINK_MAXRATE, // ESC Telemetry
+    [MAV_DATA_STREAM_EXTRA2] = 1 // Heartbeat
 };
 
 #define MAXSTREAMS (sizeof(mavRates) / sizeof(mavRates[0]))
@@ -206,7 +206,7 @@ void mavlinkSendSystemStatus(void)
 {
     uint16_t msgLength;
 
-    uint32_t onboardControlAndSensors = 35843;
+    // uint32_t onboardControlAndSensors = 35843;
 
     /*
     onboard_control_sensors_present Bitmask
@@ -218,11 +218,13 @@ void mavlinkSendSystemStatus(void)
     0000001111111111
     */
 
+    /*
+
     if (sensors(SENSOR_MAG))  onboardControlAndSensors |=  4100;
     if (sensors(SENSOR_BARO)) onboardControlAndSensors |=  8200;
     if (sensors(SENSOR_GPS))  onboardControlAndSensors |= 16416;
 
-    uint16_t batteryVoltage = 0;
+
     int16_t batteryAmperage = -1;
     int8_t batteryRemaining = 100;
 
@@ -232,6 +234,17 @@ void mavlinkSendSystemStatus(void)
         batteryRemaining = isBatteryVoltageConfigured() ? calculateBatteryPercentageRemaining() : batteryRemaining;
     }
 
+     */
+     uint16_t batteryVoltage = 0;
+     if (getBatteryState() < BATTERY_NOT_PRESENT) {
+        batteryVoltage = isBatteryVoltageConfigured() ? getBatteryVoltage() * 10 : batteryVoltage;
+        // Battery voltage, sent as a 16-bit integer (msg type mission_item_reached, due to lack of a better message)
+    	mavlink_msg_mission_item_reached_pack(0, 200, &mavMsg, batteryVoltage);
+    }
+
+
+
+    /*
     mavlink_msg_sys_status_pack(0, 200, &mavMsg,
         // onboard_control_sensors_present Bitmask showing which onboard controllers and sensors are present.
         //Value of 0: not present. Value of 1: present. Indices: 0: 3D gyro, 1: 3D acc, 2: 3D mag, 3: absolute pressure,
@@ -262,7 +275,7 @@ void mavlinkSendSystemStatus(void)
         // errors_count3 Autopilot-specific errors
         0,
         // errors_count4 Autopilot-specific errors
-        0);
+        0);*/
     msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
     mavlinkSerialWrite(mavBuffer, msgLength);
 }
@@ -278,11 +291,10 @@ void mavlinkSendESCData(void)
     uint8_t escCount = getMotorCount();
     escSensorData_t* escData;
 
+    uint32_t current[4];
+    uint32_t totalcurrent[4];
     uint16_t voltage[4];
-    uint16_t current[4];
-    uint16_t totalcurrent[4];
     uint16_t rpm[4];
-    uint16_t count[4];
     uint8_t temperature[4];
 
     for (i = 0; i < escCount; i++) {
@@ -291,22 +303,19 @@ void mavlinkSendESCData(void)
         current[i] = escData->current;
         totalcurrent[i] = escData->consumption;
         rpm[i] = escData->rpm;
-        count[i] = 0;
         temperature[i] = escData->temperature;
     }
 
     // pack the ESC telemetry data into the MAVLink message using mavlink_msg_esc_telemetry_pack
     mavlink_msg_esc_telemetry_pack(0, 200, &mavMsg,
-        // voltage Voltage in millivolts
-        voltage,
         // current Current in milliamps
         current,
         // totalcurrent Total current in milliamps
         totalcurrent,
+        // voltage Voltage in millivolts
+        voltage,
         // rpm RPM of the ESC
         rpm,
-        // count Number of telemetry packets received
-        count,
         // temperature Temperature of the ESC
         temperature);
 
@@ -449,39 +458,8 @@ void mavlinkSendAttitude(void)
     mavlinkSerialWrite(mavBuffer, msgLength);
 }
 
-void mavlinkSendHUDAndHeartbeat(void)
+void mavlinkSendHeartbeat(void)
 {
-    uint16_t msgLength;
-    float mavAltitude = 0;
-    float mavGroundSpeed = 0;
-    float mavAirSpeed = 0;
-    float mavClimbRate = 0;
-
-#if defined(USE_GPS)
-    // use ground speed if source available
-    if (sensors(SENSOR_GPS)) {
-        mavGroundSpeed = gpsSol.groundSpeed / 100.0f;
-    }
-#endif
-
-    mavAltitude = getEstimatedAltitudeCm() / 100.0;
-
-    mavlink_msg_vfr_hud_pack(0, 200, &mavMsg,
-        // airspeed Current airspeed in m/s
-        mavAirSpeed,
-        // groundspeed Current ground speed in m/s
-        mavGroundSpeed,
-        // heading Current heading in degrees, in compass units (0..360, 0=north)
-        headingOrScaledMilliAmpereHoursDrawn(),
-        // throttle Current throttle setting in integer percent, 0 to 100
-        scaleRange(constrain(rcData[THROTTLE], PWM_RANGE_MIN, PWM_RANGE_MAX), PWM_RANGE_MIN, PWM_RANGE_MAX, 0, 100),
-        // alt Current altitude (MSL), in meters, if we have sonar or baro use them, otherwise use GPS (less accurate)
-        mavAltitude,
-        // climb Current climb rate in meters/second
-        mavClimbRate);
-    msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
-    mavlinkSerialWrite(mavBuffer, msgLength);
-
 
     uint8_t mavModes = MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
     if (ARMING_FLAG(ARMED))
@@ -555,7 +533,7 @@ void mavlinkSendHUDAndHeartbeat(void)
         mavCustomMode,
         // system_status System status flag, see MAV_STATE ENUM
         mavSystemState);
-    msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
+    uint16_t msgLength = mavlink_msg_to_send_buffer(mavBuffer, &mavMsg);
     mavlinkSerialWrite(mavBuffer, msgLength);
 }
 
@@ -567,12 +545,12 @@ void processMAVLinkTelemetry(void)
     }
 
     if (mavlinkStreamTrigger(MAV_DATA_STREAM_RC_CHANNELS)) {
-        mavlinkSendRCChannelsAndRSSI();
+        // mavlinkSendRCChannelsAndRSSI();
     }
 
 #ifdef USE_GPS
     if (mavlinkStreamTrigger(MAV_DATA_STREAM_POSITION)) {
-        mavlinkSendPosition();
+        // mavlinkSendPosition();
     }
 #endif
 
@@ -581,7 +559,7 @@ void processMAVLinkTelemetry(void)
     }
 
     if (mavlinkStreamTrigger(MAV_DATA_STREAM_EXTRA2)) {
-        mavlinkSendHUDAndHeartbeat();
+        mavlinkSendHeartbeat();
     }
 }
 
